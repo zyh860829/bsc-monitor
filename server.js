@@ -6,13 +6,13 @@ const cors = require('cors');
 
 // ==================== 配置区域 ====================
 const CONFIG = {
-  // 钉钉机器人Webhook（请替换为您的真实地址）
-  DINGTALK_WEBHOOK: 'https://oapi.dingtalk.com/robot/send?access_token=YOUR_REAL_TOKEN_HERE',
+  // 钉钉机器人Webhook（已替换为您的真实地址）
+  DINGTALK_WEBHOOK: 'https://oapi.dingtalk.com/robot/send?access_token=d5d287f2356ab6bfa343bd2300fee541d0066505f938871992872ffc7db7a2c8',
   
-  // 监控的钱包地址列表（今晚使用数组配置，明天升级为数据库）
+  // 监控的钱包地址列表（已替换为您的钱包地址）
   MONITORED_WALLETS: [
-    '0xYourFirstWalletAddressHere',  // 请替换为真实地址
-    '0xYourSecondWalletAddressHere'  // 请替换为真实地址
+    '0x242baea6afbacde994817805db8b5c020a665811',
+    '0xd1963eaa57432147b658de28c762cae79f2c8308'
   ],
   
   // 多节点配置
@@ -666,7 +666,10 @@ app.listen(PORT, () => {
   console.log(`📍 本地访问: http://localhost:${PORT}`);
   console.log(`🔧 管理界面: http://localhost:${PORT}/admin`);
   console.log(`❤️ 健康检查: http://localhost:${PORT}/health`);
-  console.log('📋 请记得修改配置中的钉钉Webhook和钱包地址!');
+  console.log('📋 配置信息:');
+  console.log(`   - 钉钉Webhook: 已配置`);
+  console.log(`   - 监控钱包: ${CONFIG.MONITORED_WALLETS.length} 个`);
+  console.log(`   - 节点数量: ${CONFIG.NODES.length} 个`);
   console.log('='.repeat(60));
   
   // 延迟启动监控，确保服务器先启动
