@@ -1,4 +1,4 @@
-// server.js - BSC钱包实时监控系统完整版
+// server.js - BSC钱包实时监控系统优化版
 const Web3 = require('web3');
 const axios = require('axios');
 const express = require('express');
@@ -6,41 +6,50 @@ const cors = require('cors');
 
 // ==================== 配置区域 ====================
 const CONFIG = {
-  // 钉钉机器人Webhook（已替换为您的真实地址）
+  // 钉钉机器人Webhook
   DINGTALK_WEBHOOK: 'https://oapi.dingtalk.com/robot/send?access_token=d5d287f2356ab6bfa343bd2300fee541d0066505f938871992872ffc7db7a2c8',
   
-  // 监控的钱包地址列表（已替换为您的钱包地址）
+  // 监控的钱包地址列表
   MONITORED_WALLETS: [
     '0x242baea6afbacde994817805db8b5c020a665811',
     '0xd1963eaa57432147b658de28c762cae79f2c8308'
   ],
   
-  // 多节点配置
+  // 多节点配置 - 优化版
   NODES: [
+    // 第一梯队：高质量节点
     {
-      name: 'Infura',
-      url: 'wss://bsc-mainnet.infura.io/ws/v3/1534e27b86374dea86bcb987d984d2a61',
+      name: 'Infura专属节点',
+      url: 'wss://bsc-mainnet.infura.io/ws/v3/1534e27b86374dea86bcb87d984d2a61',
       type: 'websocket',
       priority: 1
     },
+    // 第二梯队：可靠公共节点
     {
-      name: 'Binance Official',
+      name: 'Binance官方节点',
       url: 'wss://bsc-ws-node.nariox.org:443',
-      type: 'websocket', 
+      type: 'websocket',
       priority: 2
     },
     {
-      name: 'Moralis Backup',
-      url: 'https://speedy-nodes-nyc.moralis.io/YOUR_API_KEY/bsc/mainnet',
-      type: 'https',
+      name: 'Ankr节点',
+      url: 'wss://rpc.ankr.com/bsc/ws',
+      type: 'websocket', 
       priority: 3
     }
   ],
   
-  // 请求频率限制
+  // 优化请求频率
   RATE_LIMIT: {
-    requestsPerSecond: 3,
-    backupPollingInterval: 15000 // 15秒备用轮询
+    requestsPerSecond: 5,
+    backupPollingInterval: 10000 // 10秒备用轮询
+  },
+  
+  // 保活配置
+  KEEP_ALIVE: {
+    enabled: true,
+    interval: 8 * 60 * 1000, // 8分钟一次（小于10分钟休眠阈值）
+    url: 'https://bsc-monitor-4tdg.onrender.com/health'
   }
 };
 
@@ -53,37 +62,47 @@ class BSCWalletMonitor {
     this.tokenCache = new Map();
     this.requestCount = 0;
     this.lastRequestTime = Date.now();
+    this.lastProcessedBlock = null;
+    this.keepAliveInterval = null;
     
-    // 为明天数据库升级预留的标识
     this.useDatabase = false;
   }
   
-  // 多节点连接管理
+  // 多节点连接管理 - 优化版
   async connectToNode() {
-    const MAX_RETRIES = 3;
+    const MAX_RETRIES = 2;
     
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
         const node = CONFIG.NODES[this.activeNodeIndex];
-        console.log(`尝试连接节点: ${node.name} (尝试 ${attempt}/${MAX_RETRIES})`);
+        console.log(`🚀 快速连接节点: ${node.name} (尝试 ${attempt}/${MAX_RETRIES})`);
         
         if (node.type === 'websocket') {
           this.web3 = new Web3(new Web3.providers.WebsocketProvider(node.url, {
-            timeout: 30000,
+            timeout: 8000,
             reconnect: {
               auto: true,
-              delay: 5000,
-              maxAttempts: 15,
-              onTimeout: false
+              delay: 2000,
+              maxAttempts: 8,
+              onTimeout: true
+            },
+            clientConfig: {
+              keepalive: true,
+              keepaliveInterval: 15000
             }
           }));
         } else {
-          this.web3 = new Web3(new Web3.providers.HttpProvider(node.url));
+          this.web3 = new Web3(new Web3.providers.HttpProvider(node.url, {
+            timeout: 10000
+          }));
         }
         
-        // 测试连接
+        // 快速连接测试
+        const startTime = Date.now();
         const blockNumber = await this.web3.eth.getBlockNumber();
-        console.log(`✅ 节点连接成功: ${node.name}, 当前区块: ${blockNumber}`);
+        const connectTime = Date.now() - startTime;
+        
+        console.log(`✅ 节点连接成功: ${node.name}, 耗时: ${connectTime}ms, 区块: ${blockNumber}`);
         return true;
         
       } catch (error) {
@@ -95,8 +114,7 @@ class BSCWalletMonitor {
           return false;
         }
         
-        // 等待后重试
-        await this.sleep(2000);
+        await this.sleep(1000);
       }
     }
   }
@@ -136,6 +154,12 @@ class BSCWalletMonitor {
       return;
     }
     
+    // 启动保活机制
+    this.startKeepAlive();
+    
+    // 发送启动成功通知
+    await this.sendStartupNotification();
+    
     // 订阅新区块
     try {
       this.web3.eth.subscribe('newBlockHeaders', (error, blockHeader) => {
@@ -155,11 +179,14 @@ class BSCWalletMonitor {
       this.handleConnectionError();
     }
     
-    // 启动备用轮询（防止WebSocket漏块）
+    // 启动备用轮询
     this.startBackupPolling();
     
     // 启动统计报告
     this.startStatsReporting();
+    
+    // 启动节点健康检查
+    this.startNodeHealthCheck();
   }
   
   // 处理连接错误
@@ -169,7 +196,7 @@ class BSCWalletMonitor {
     setTimeout(() => this.startMonitoring(), 5000);
   }
   
-  // 处理新区块
+  // 处理新区块 - 优化并行处理
   async processBlock(blockNumber) {
     try {
       await this.rateLimit();
@@ -181,9 +208,14 @@ class BSCWalletMonitor {
       
       console.log(`🔍 扫描区块 ${blockNumber}, 交易数量: ${block.transactions.length}`);
       
-      for (const tx of block.transactions) {
-        await this.processTransaction(tx, block);
-      }
+      // 并行处理交易
+      const processingPromises = block.transactions.map(tx => 
+        this.processTransaction(tx, block)
+      );
+      
+      await Promise.all(processingPromises);
+      this.lastProcessedBlock = blockNumber;
+      
     } catch (error) {
       console.error(`处理区块 ${blockNumber} 错误:`, error.message);
     }
@@ -193,19 +225,18 @@ class BSCWalletMonitor {
   async processTransaction(tx, block) {
     const txKey = `${tx.hash}-${block.number}`;
     
-    // 防止重复处理
     if (this.processedTransactions.has(txKey)) {
       return;
     }
     this.processedTransactions.add(txKey);
     
-    // 清理旧记录（防止内存泄漏）
+    // 清理旧记录
     if (this.processedTransactions.size > 10000) {
       const firstKey = this.processedTransactions.values().next().value;
       this.processedTransactions.delete(firstKey);
     }
     
-    // 检查是否监控的钱包地址
+    // 检查监控钱包
     const fromMonitored = CONFIG.MONITORED_WALLETS.includes(tx.from?.toLowerCase());
     const toMonitored = CONFIG.MONITORED_WALLETS.includes(tx.to?.toLowerCase());
     
@@ -215,31 +246,109 @@ class BSCWalletMonitor {
     }
   }
   
-  // 分析交易并发送通知
+  // 分析交易并发送通知 - 优化快速通知
   async analyzeAndNotify(tx, block, fromMonitored, toMonitored) {
+    const notificationStartTime = Date.now();
+    
     try {
-      let tokenInfo = null;
+      // 快速判断交易类型
       let transactionType = '';
+      let isTokenTrade = false;
       
-      // 判断交易类型
-      if (tx.input && tx.input !== '0x' && tx.input.length > 10) {
-        // 可能是代币交易
-        tokenInfo = await this.getTokenInfo(tx);
-        transactionType = '代币交易';
-      } else if (fromMonitored && toMonitored) {
+      if (fromMonitored && toMonitored) {
         transactionType = '内部转账';
       } else if (fromMonitored) {
-        transactionType = '转出';
+        transactionType = '转出BNB';
       } else if (toMonitored) {
-        transactionType = '转入';
+        transactionType = '转入BNB';
       }
       
-      const message = this.generateDingTalkMessage(tx, block, transactionType, tokenInfo);
-      await this.sendDingTalkNotification(message);
+      // 快速检测代币交易
+      if (tx.input && tx.input !== '0x' && tx.input.length > 10) {
+        isTokenTrade = true;
+        transactionType = '代币交易';
+      }
+      
+      // 3秒内发送首次通知
+      const basicMessage = this.generateBasicDingTalkMessage(tx, block, transactionType);
+      await this.sendDingTalkNotification(basicMessage);
+      
+      const firstNotificationTime = Date.now() - notificationStartTime;
+      console.log(`⚡ 首次通知耗时: ${firstNotificationTime}ms`);
+      
+      // 异步获取代币详情
+      if (isTokenTrade) {
+        setTimeout(async () => {
+          try {
+            const tokenInfo = await this.getTokenInfo(tx);
+            const detailedMessage = this.generateTokenDingTalkMessage(tx, block, tokenInfo);
+            await this.sendDingTalkNotification(detailedMessage);
+            console.log(`🔍 代币详情通知已发送`);
+          } catch (error) {
+            console.log('代币详情获取失败，但基础通知已发送');
+          }
+        }, 2000);
+      }
       
     } catch (error) {
-      console.error('分析交易失败:', error);
+      console.error('交易分析失败:', error);
     }
+  }
+  
+  // 基础快速通知
+  generateBasicDingTalkMessage(tx, block, transactionType) {
+    const shortAddress = (addr) => addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : '合约创建';
+    const amount = this.web3.utils.fromWei(tx.value || '0', 'ether');
+    
+    let emoji = '🔔';
+    if (transactionType.includes('转入')) emoji = '💰';
+    if (transactionType.includes('转出')) emoji = '📤';
+    if (transactionType.includes('代币')) emoji = '🚀';
+    
+    return {
+      msgtype: 'markdown',
+      markdown: {
+        title: `${emoji} BSC交易监控`,
+        text: `### ${emoji} 实时交易提醒\n\n` +
+              `**交易类型**: ${transactionType}\n` +
+              `**监控钱包**: \`${shortAddress(tx.from || tx.to)}\`\n` +
+              `**金额**: ${amount} BNB\n` +
+              `**区块**: ${block.number}\n` +
+              `**时间**: ${new Date().toLocaleString('zh-CN')}\n\n` +
+              `🔗 [立即查看交易](https://bscscan.com/tx/${tx.hash})`
+      },
+      at: {
+        isAtAll: false
+      }
+    };
+  }
+  
+  // 代币详情通知
+  generateTokenDingTalkMessage(tx, block, tokenInfo) {
+    const shortAddress = (addr) => addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : '合约创建';
+    
+    return {
+      msgtype: 'markdown',
+      markdown: {
+        title: '🚀 Meme币交易详情',
+        text: `### 🔥 Meme币交易详情\n\n` +
+              `**交易类型**: 代币交易\n` +
+              `**监控钱包**: \`${shortAddress(tx.from || tx.to)}\`\n` +
+              `**代币名称**: ${tokenInfo?.name || 'Unknown'}\n` +
+              `**代币符号**: ${tokenInfo?.symbol || 'UNKNOWN'}\n` +
+              `**合约地址**: \`${tokenInfo?.address || tx.to}\`\n` +
+              `**交易哈希**: \`${tx.hash}\`\n` +
+              `**区块高度**: ${block.number}\n\n` +
+              
+              `🔗 **快速链接**\n` +
+              `- [查看交易](https://bscscan.com/tx/${tx.hash})\n` +
+              `- [Dextools分析](https://www.dextools.io/app/bnb/pair-explorer/${tokenInfo?.address || tx.to})\n` +
+              `- [购买代币](https://pancakeswap.finance/swap?outputCurrency=${tokenInfo?.address || tx.to})`
+      },
+      at: {
+        isAtAll: false
+      }
+    };
   }
   
   // 获取代币信息
@@ -247,14 +356,12 @@ class BSCWalletMonitor {
     try {
       if (!tx.to) return null;
       
-      // 检查缓存
       if (this.tokenCache.has(tx.to)) {
         return this.tokenCache.get(tx.to);
       }
       
       await this.rateLimit();
       
-      // 获取代币基本信息
       const tokenContract = new this.web3.eth.Contract([
         {
           constant: true,
@@ -292,7 +399,6 @@ class BSCWalletMonitor {
         decimals: parseInt(decimals) || 18
       };
       
-      // 缓存结果（5分钟）
       this.tokenCache.set(tx.to, tokenInfo);
       setTimeout(() => this.tokenCache.delete(tx.to), 300000);
       
@@ -301,55 +407,6 @@ class BSCWalletMonitor {
       console.log(`获取代币信息失败: ${error.message}`);
       return null;
     }
-  }
-  
-  // 生成钉钉消息
-  generateDingTalkMessage(tx, block, transactionType, tokenInfo) {
-    const shortAddress = (addr) => addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : 'Contract Creation';
-    const shortHash = (hash) => `${hash.slice(0, 8)}...${hash.slice(-6)}`;
-    
-    let title = '🔄 BSC交易监控';
-    let emoji = '🔔';
-    
-    if (tokenInfo) {
-      title = '🚀 Meme币交易警报';
-      emoji = '🔥';
-    } else if (transactionType === '转入') {
-      emoji = '💰';
-    } else if (transactionType === '转出') {
-      emoji = '📤';
-    }
-    
-    const amount = this.web3.utils.fromWei(tx.value || '0', 'ether');
-    
-    const message = {
-      msgtype: 'markdown',
-      markdown: {
-        title: title,
-        text: `### ${emoji} ${title}\n\n` +
-              `**交易类型: ${transactionType}**\n\n` +
-              `📊 **交易详情**\n` +
-              `- 监控钱包: \`${shortAddress(tx.from || tx.to)}\` \n` +
-              (tokenInfo ? `- 代币名称: ${tokenInfo.name}\n` : '') +
-              (tokenInfo ? `- 代币符号: ${tokenInfo.symbol}\n` : '') +
-              (tokenInfo ? `- 合约地址: \`${tokenInfo.address}\` \n` : '') +
-              `- 金额: ${amount} BNB\n` +
-              `- 交易哈希: \`${tx.hash}\` \n` +
-              `- 区块高度: ${block.number}\n` +
-              `- 时间: ${new Date().toLocaleString('zh-CN')}\n\n` +
-              
-              `🔗 **快速链接**\n` +
-              `- [🦅 查看交易](https://bscscan.com/tx/${tx.hash})\n` +
-              (tokenInfo ? `- [📱 Dextools](https://www.dextools.io/app/bnb/pair-explorer/${tokenInfo.address})\n` : '') +
-              (tokenInfo ? `- [💰 购买代币](https://pancakeswap.finance/swap?outputCurrency=${tokenInfo.address})\n` : '') +
-              `\n💡 **提示**: 长按地址可复制`
-      },
-      at: {
-        isAtAll: false
-      }
-    };
-    
-    return message;
   }
   
   // 发送钉钉通知
@@ -376,7 +433,6 @@ class BSCWalletMonitor {
         await this.rateLimit();
         const currentBlock = await this.web3.eth.getBlockNumber();
         
-        // 检查最近2个区块，防止漏块
         for (let i = Math.max(0, currentBlock - 2); i <= currentBlock; i++) {
           await this.processBlock(i);
         }
@@ -400,17 +456,102 @@ class BSCWalletMonitor {
       };
       
       console.log('📊 系统统计:', stats);
-    }, 60000); // 每分钟报告一次
+    }, 60000);
   }
   
-  // ==================== 为明天管理界面预留的方法 ====================
+  // ==================== 新增优化功能 ====================
   
-  // 获取当前监控的钱包列表
+  // 启动保活机制
+  startKeepAlive() {
+    if (!CONFIG.KEEP_ALIVE.enabled) return;
+    
+    this.keepAliveInterval = setInterval(async () => {
+      try {
+        await axios.get(CONFIG.KEEP_ALIVE.url, {
+          timeout: 10000
+        });
+        console.log('❤️  保活心跳成功');
+      } catch (error) {
+        console.log('💔 保活心跳失败:', error.message);
+      }
+    }, CONFIG.KEEP_ALIVE.interval);
+    
+    console.log('✅ 自保活机制已启动');
+  }
+  
+  // 启动节点健康检查
+  startNodeHealthCheck() {
+    setInterval(async () => {
+      try {
+        const startTime = Date.now();
+        const blockNumber = await this.web3.eth.getBlockNumber();
+        const responseTime = Date.now() - startTime;
+        
+        console.log(`🏥 节点健康检查: ${CONFIG.NODES[this.activeNodeIndex].name}, 响应时间: ${responseTime}ms`);
+        
+        if (responseTime > 5000) {
+          console.log('⚠️ 节点响应缓慢，考虑切换');
+          this.switchToNextNode();
+        }
+      } catch (error) {
+        console.log('❌ 节点健康检查失败，切换节点');
+        this.switchToNextNode();
+      }
+    }, 2 * 60 * 1000); // 每2分钟检查一次
+  }
+  
+  // 漏块检查机制
+  async checkMissedBlocks() {
+    try {
+      const currentBlock = await this.web3.eth.getBlockNumber();
+      if (this.lastProcessedBlock && currentBlock > this.lastProcessedBlock + 1) {
+        console.log(`🔍 发现 ${currentBlock - this.lastProcessedBlock - 1} 个漏块，正在补扫...`);
+        
+        const promises = [];
+        for (let i = this.lastProcessedBlock + 1; i <= currentBlock; i++) {
+          promises.push(this.processBlock(i));
+        }
+        await Promise.all(promises);
+      }
+      this.lastProcessedBlock = currentBlock;
+    } catch (error) {
+      console.error('漏块检查错误:', error.message);
+    }
+  }
+  
+  // 启动成功通知
+  async sendStartupNotification() {
+    const message = {
+      msgtype: 'markdown',
+      markdown: {
+        title: '🚀 BSC监控系统启动成功',
+        text: `### 🟢 BSC钱包监控系统已启动\n\n` +
+              `**启动时间**: ${new Date().toLocaleString('zh-CN')}\n` +
+              `**监控钱包**: ${CONFIG.MONITORED_WALLETS.length}个\n` +
+              `**当前节点**: ${CONFIG.NODES[this.activeNodeIndex].name}\n` +
+              `**服务地址**: https://bsc-monitor-4tdg.onrender.com\n\n` +
+              `💡 系统已开始监控，有交易时会实时通知`
+      },
+      at: {
+        isAtAll: false
+      }
+    };
+    
+    try {
+      await axios.post(CONFIG.DINGTALK_WEBHOOK, message, {
+        timeout: 10000
+      });
+      console.log('✅ 启动通知发送成功');
+    } catch (error) {
+      console.error('❌ 启动通知发送失败:', error.message);
+    }
+  }
+  
+  // 管理界面相关方法保持不变
   getMonitoredWallets() {
     return [...CONFIG.MONITORED_WALLETS];
   }
   
-  // 添加监控钱包（今晚版本：直接修改数组）
   addWallet(walletAddress) {
     const address = walletAddress.toLowerCase();
     if (!CONFIG.MONITORED_WALLETS.includes(address)) {
@@ -421,7 +562,6 @@ class BSCWalletMonitor {
     return false;
   }
   
-  // 移除监控钱包
   removeWallet(walletAddress) {
     const address = walletAddress.toLowerCase();
     const index = CONFIG.MONITORED_WALLETS.indexOf(address);
@@ -433,11 +573,10 @@ class BSCWalletMonitor {
     return false;
   }
   
-  // 获取系统状态
   getSystemStatus() {
     return {
       isMonitoring: !!this.web3,
-      currentBlock: this.lastBlockNumber,
+      currentBlock: this.lastProcessedBlock,
       monitoredWallets: CONFIG.MONITORED_WALLETS.length,
       processedTransactions: this.processedTransactions.size,
       activeNode: CONFIG.NODES[this.activeNodeIndex].name,
@@ -461,7 +600,7 @@ app.get('/', (req, res) => {
   res.json({ 
     status: '运行中', 
     service: 'BSC钱包监控系统',
-    version: '1.0',
+    version: '2.0', // 版本号更新
     timestamp: new Date().toISOString()
   });
 });
@@ -476,9 +615,7 @@ app.get('/status', (req, res) => {
   res.json(status);
 });
 
-// ==================== 为明天管理界面预留的API端点 ====================
-
-// 获取监控钱包列表
+// 管理界面API端点（保持不变）
 app.get('/api/wallets', (req, res) => {
   res.json({
     success: true,
@@ -487,7 +624,6 @@ app.get('/api/wallets', (req, res) => {
   });
 });
 
-// 添加监控钱包
 app.post('/api/wallets', (req, res) => {
   const { walletAddress } = req.body;
   
@@ -498,7 +634,6 @@ app.post('/api/wallets', (req, res) => {
     });
   }
   
-  // 简单的地址格式验证
   if (!/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
     return res.status(400).json({
       success: false,
@@ -522,7 +657,6 @@ app.post('/api/wallets', (req, res) => {
   }
 });
 
-// 移除监控钱包
 app.delete('/api/wallets/:address', (req, res) => {
   const { address } = req.params;
   
@@ -542,7 +676,7 @@ app.delete('/api/wallets/:address', (req, res) => {
   }
 });
 
-// ==================== 管理界面页面 ====================
+// 管理界面页面（保持不变）
 app.get('/admin', (req, res) => {
   const status = walletMonitor.getSystemStatus();
   const wallets = walletMonitor.getMonitoredWallets();
@@ -572,10 +706,10 @@ app.get('/admin', (req, res) => {
 </head>
 <body>
     <div class="container">
-        <h1>🔍 BSC钱包监控系统 - 管理界面</h1>
+        <h1>🔍 BSC钱包监控系统 - 管理界面 v2.0</h1>
         
         <div class="note">
-            <strong>提示：</strong> 这是基础管理界面。明天将升级为完整的数据库版本，支持更多功能。
+            <strong>新功能：</strong> 系统已升级！包含快速通知、多节点优化、防休眠保活等功能。
         </div>
         
         <div class="status">
@@ -662,17 +796,18 @@ app.get('/admin', (req, res) => {
 // ==================== 启动服务器和监控 ====================
 app.listen(PORT, () => {
   console.log('='.repeat(60));
-  console.log('🚀 BSC钱包监控系统启动成功!');
+  console.log('🚀 BSC钱包监控系统 v2.0 启动成功!');
   console.log(`📍 本地访问: http://localhost:${PORT}`);
   console.log(`🔧 管理界面: http://localhost:${PORT}/admin`);
   console.log(`❤️ 健康检查: http://localhost:${PORT}/health`);
-  console.log('📋 配置信息:');
-  console.log(`   - 钉钉Webhook: 已配置`);
-  console.log(`   - 监控钱包: ${CONFIG.MONITORED_WALLETS.length} 个`);
-  console.log(`   - 节点数量: ${CONFIG.NODES.length} 个`);
+  console.log('📋 新功能:');
+  console.log(`   - ⚡ 5秒快速通知`);
+  console.log(`   - 🔄 多节点优化`);
+  console.log(`   - ❤️ 防休眠保活`);
+  console.log(`   - 🏥 节点健康检查`);
   console.log('='.repeat(60));
   
-  // 延迟启动监控，确保服务器先启动
+  // 延迟启动监控
   setTimeout(() => {
     walletMonitor.startMonitoring().catch(error => {
       console.error('❌ 监控系统启动失败:', error);
@@ -683,10 +818,16 @@ app.listen(PORT, () => {
 // 优雅关闭
 process.on('SIGINT', () => {
   console.log('\n👋 收到关闭信号，正在优雅退出...');
+  if (walletMonitor.keepAliveInterval) {
+    clearInterval(walletMonitor.keepAliveInterval);
+  }
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
   console.log('\n👋 收到终止信号，正在优雅退出...');
+  if (walletMonitor.keepAliveInterval) {
+    clearInterval(walletMonitor.keepAliveInterval);
+  }
   process.exit(0);
 });
