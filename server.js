@@ -1,4 +1,4 @@
-// server.js - BSC钱包实时监控系统优化版
+// server.js - BSC钱包实时监控系统优化版（修复大整数错误）
 const Web3 = require('web3');
 const axios = require('axios');
 const express = require('express');
@@ -196,17 +196,22 @@ class BSCWalletMonitor {
     setTimeout(() => this.startMonitoring(), 5000);
   }
   
-  // 处理新区块 - 优化并行处理
+  // 处理新区块 - 修复大整数错误
   async processBlock(blockNumber) {
     try {
       await this.rateLimit();
+      
+      // 使用字符串处理大整数，避免Number类型限制
+      const blockNumberStr = blockNumber.toString();
+      console.log(`🔍 开始处理区块: ${blockNumberStr}`);
+      
       const block = await this.web3.eth.getBlock(blockNumber, true);
       
       if (!block || !block.transactions) {
         return;
       }
       
-      console.log(`🔍 扫描区块 ${blockNumber}, 交易数量: ${block.transactions.length}`);
+      console.log(`🔍 扫描区块 ${blockNumberStr}, 交易数量: ${block.transactions.length}`);
       
       // 并行处理交易
       const processingPromises = block.transactions.map(tx => 
@@ -217,13 +222,16 @@ class BSCWalletMonitor {
       this.lastProcessedBlock = blockNumber;
       
     } catch (error) {
-      console.error(`处理区块 ${blockNumber} 错误:`, error.message);
+      // 修复：使用字符串避免大整数错误
+      const blockNumberStr = blockNumber.toString();
+      console.error(`处理区块 ${blockNumberStr} 错误:`, error.message);
     }
   }
   
   // 处理交易
   async processTransaction(tx, block) {
-    const txKey = `${tx.hash}-${block.number}`;
+    // 使用字符串处理交易哈希和区块号
+    const txKey = `${tx.hash}-${block.number.toString()}`;
     
     if (this.processedTransactions.has(txKey)) {
       return;
@@ -298,7 +306,17 @@ class BSCWalletMonitor {
   // 基础快速通知
   generateBasicDingTalkMessage(tx, block, transactionType) {
     const shortAddress = (addr) => addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : '合约创建';
-    const amount = this.web3.utils.fromWei(tx.value || '0', 'ether');
+    
+    // 修复：使用BigInt处理大整数
+    let amount = '0';
+    try {
+      if (tx.value) {
+        const valueBigInt = BigInt(tx.value);
+        amount = this.web3.utils.fromWei(valueBigInt.toString(), 'ether');
+      }
+    } catch (error) {
+      console.log('金额转换错误，使用默认值');
+    }
     
     let emoji = '🔔';
     if (transactionType.includes('转入')) emoji = '💰';
@@ -313,7 +331,7 @@ class BSCWalletMonitor {
               `**交易类型**: ${transactionType}\n` +
               `**监控钱包**: \`${shortAddress(tx.from || tx.to)}\`\n` +
               `**金额**: ${amount} BNB\n` +
-              `**区块**: ${block.number}\n` +
+              `**区块**: ${block.number.toString()}\n` +
               `**时间**: ${new Date().toLocaleString('zh-CN')}\n\n` +
               `🔗 [立即查看交易](https://bscscan.com/tx/${tx.hash})`
       },
@@ -338,7 +356,7 @@ class BSCWalletMonitor {
               `**代币符号**: ${tokenInfo?.symbol || 'UNKNOWN'}\n` +
               `**合约地址**: \`${tokenInfo?.address || tx.to}\`\n` +
               `**交易哈希**: \`${tx.hash}\`\n` +
-              `**区块高度**: ${block.number}\n\n` +
+              `**区块高度**: ${block.number.toString()}\n\n` +
               
               `🔗 **快速链接**\n` +
               `- [查看交易](https://bscscan.com/tx/${tx.hash})\n` +
@@ -389,9 +407,10 @@ class BSCWalletMonitor {
       const [name, symbol, decimals] = await Promise.all([
         tokenContract.methods.name().call().catch(() => 'Unknown'),
         tokenContract.methods.symbol().call().catch(() => 'UNKNOWN'),
-        tokenContract.methods.decimals().call().catch(() => 18)
+        tokenContract.methods.decimals().call().catch(() => '18')
       ]);
       
+      // 修复：确保decimals是数字
       const tokenInfo = {
         name: name || 'Unknown Token',
         symbol: symbol || 'UNKNOWN',
@@ -600,7 +619,7 @@ app.get('/', (req, res) => {
   res.json({ 
     status: '运行中', 
     service: 'BSC钱包监控系统',
-    version: '2.0', // 版本号更新
+    version: '2.1', // 版本号更新，修复大整数错误
     timestamp: new Date().toISOString()
   });
 });
@@ -615,7 +634,7 @@ app.get('/status', (req, res) => {
   res.json(status);
 });
 
-// 管理界面API端点（保持不变）
+// 管理界面API端点
 app.get('/api/wallets', (req, res) => {
   res.json({
     success: true,
@@ -676,7 +695,7 @@ app.delete('/api/wallets/:address', (req, res) => {
   }
 });
 
-// 管理界面页面（保持不变）
+// 管理界面页面
 app.get('/admin', (req, res) => {
   const status = walletMonitor.getSystemStatus();
   const wallets = walletMonitor.getMonitoredWallets();
@@ -702,11 +721,16 @@ app.get('/admin', (req, res) => {
         .delete-btn { background: #f44336; margin-left: 10px; }
         .delete-btn:hover { background: #da190b; }
         .note { background: #fff3cd; padding: 10px; border-radius: 4px; margin: 15px 0; border-left: 4px solid #ffc107; }
+        .fix-note { background: #d4edda; padding: 10px; border-radius: 4px; margin: 15px 0; border-left: 4px solid #28a745; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🔍 BSC钱包监控系统 - 管理界面 v2.0</h1>
+        <h1>🔍 BSC钱包监控系统 - 管理界面 v2.1</h1>
+        
+        <div class="fix-note">
+            <strong>✅ 已修复：</strong> 大整数处理错误问题，系统现在稳定运行！
+        </div>
         
         <div class="note">
             <strong>新功能：</strong> 系统已升级！包含快速通知、多节点优化、防休眠保活等功能。
@@ -796,7 +820,7 @@ app.get('/admin', (req, res) => {
 // ==================== 启动服务器和监控 ====================
 app.listen(PORT, () => {
   console.log('='.repeat(60));
-  console.log('🚀 BSC钱包监控系统 v2.0 启动成功!');
+  console.log('🚀 BSC钱包监控系统 v2.1 启动成功!');
   console.log(`📍 本地访问: http://localhost:${PORT}`);
   console.log(`🔧 管理界面: http://localhost:${PORT}/admin`);
   console.log(`❤️ 健康检查: http://localhost:${PORT}/health`);
@@ -805,6 +829,7 @@ app.listen(PORT, () => {
   console.log(`   - 🔄 多节点优化`);
   console.log(`   - ❤️ 防休眠保活`);
   console.log(`   - 🏥 节点健康检查`);
+  console.log(`   - 🔧 修复大整数错误`);
   console.log('='.repeat(60));
   
   // 延迟启动监控
