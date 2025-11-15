@@ -1,6 +1,6 @@
 {
   "name": "bsc-wallet-monitor-ultimate",
-  "version": "8.0.0",
+  "version": "8.1.0",
   "description": "BSC钱包终极监控系统 - 集成所有优化",
   "main": "server.js",
   "scripts": {
