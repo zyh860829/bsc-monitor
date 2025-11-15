@@ -49,7 +49,7 @@ const CONFIG = {
   KEEP_ALIVE: {
     enabled: true,
     interval: 300000, // 5分钟
-    url: 'https://bsc-monitor.onrender.com/health'
+    url: 'https://bsc-monitor-4tdg.onrender.com/health'
   }
 };
 
@@ -845,12 +845,194 @@ app.delete('/api/wallets/:address', (req, res) => {
   }
 });
 
+// 完整管理界面页面
+app.get('/admin', (req, res) => {
+  const status = walletMonitor.getSystemStatus();
+  const wallets = walletMonitor.getMonitoredWallets();
+  
+  res.send(`
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BSC钱包终极监控系统</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 1000px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        .status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0; }
+        .status-card { background: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 4px solid #007bff; }
+        .performance-card { background: #e8f5e8; border-left-color: #28a745; }
+        .system-card { background: #fff3cd; border-left-color: #ffc107; }
+        .insurance-card { background: #d1ecf1; border-left-color: #17a2b8; }
+        .wallets { margin: 20px 0; }
+        .wallet-item { background: #f9f9f9; padding: 10px; margin: 5px 0; border-radius: 4px; border-left: 4px solid #4CAF50; display: flex; justify-content: space-between; align-items: center; }
+        .form-group { margin: 20px 0; }
+        input[type="text"] { width: 70%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 16px; margin-right: 10px; }
+        button { background: #4CAF50; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #45a049; }
+        .delete-btn { background: #f44336; }
+        .delete-btn:hover { background: #da190b; }
+        .speed-indicator { 
+            background: #4CAF50; color: white; padding: 15px; border-radius: 8px; 
+            text-align: center; font-size: 20px; font-weight: bold; margin: 20px 0;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        .ultra-fast { background: linear-gradient(45deg, #4CAF50, #45a049); }
+        .fast { background: linear-gradient(45deg, #ff9800, #ff5722); }
+        .slow { background: linear-gradient(45deg, #f44336, #d32f2f); }
+        .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 10px 0; }
+        .stat-item { text-align: center; padding: 8px; background: white; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🛡️ BSC钱包终极监控系统 v8.0</h1>
+        
+        <div class="speed-indicator ${parseInt(status.performance.lastNotificationTime) <= 3000 ? 'ultra-fast' : parseInt(status.performance.lastNotificationTime) <= 5000 ? 'fast' : 'slow'}">
+            ⚡ 目标: 5秒内通知 | 最后响应: ${status.performance.lastNotificationTime} | 极速率: ${status.performance.fastRate}
+        </div>
+        
+        <div class="status-grid">
+            <div class="status-card performance-card">
+                <h3>📊 性能统计</h3>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div style="font-size: 24px; font-weight: bold;">${status.performance.totalBlocks}</div>
+                        <div>处理区块</div>
+                    </div>
+                    <div class="stat-item">
+                        <div style="font-size: 24px; font-weight: bold;">${status.performance.totalTransactions}</div>
+                        <div>扫描交易</div>
+                    </div>
+                    <div class="stat-item">
+                        <div style="font-size: 24px; font-weight: bold;">${status.performance.totalNotifications}</div>
+                        <div>发送通知</div>
+                    </div>
+                </div>
+                <p><strong>平均响应:</strong> ${status.performance.averageResponseTime}</p>
+                <p><strong>极速通知:</strong> ${status.performance.fastNotifications}</p>
+                <p><strong>最后区块:</strong> ${status.performance.lastProcessedBlock || '未知'}</p>
+            </div>
+            
+            <div class="status-card system-card">
+                <h3>🔧 系统状态</h3>
+                <p><strong>运行状态:</strong> ${status.isMonitoring ? '✅ 监控中' : '❌ 未运行'}</p>
+                <p><strong>WebSocket:</strong> ${status.websocketConnected ? '✅ 已连接' : '❌ 断开'}</p>
+                <p><strong>监控钱包:</strong> ${status.monitoredWallets}个</p>
+                <p><strong>已处理交易:</strong> ${status.processedTransactions}</p>
+                <p><strong>漏块数量:</strong> ${status.missedBlocks}</p>
+            </div>
+            
+            <div class="status-card">
+                <h3>🌐 节点信息</h3>
+                <p><strong>WebSocket节点:</strong> ${status.activeWsNode}</p>
+                <p><strong>HTTP节点:</strong> ${status.activeHttpNode}</p>
+            </div>
+            
+            <div class="status-card insurance-card">
+                <h3>🛡️ 三重保险</h3>
+                <p>✅ WebSocket实时监听</p>
+                <p>✅ HTTP轮询备份</p>
+                <p>✅ 漏块自动补扫</p>
+                <p>✅ 零大整数错误</p>
+                <p>✅ 5秒内通知</p>
+            </div>
+        </div>
+        
+        <div class="wallets">
+            <h3>👛 监控的钱包地址</h3>
+            ${wallets.map(wallet => `
+                <div class="wallet-item">
+                    <code>${wallet}</code>
+                    <button class="delete-btn" onclick="removeWallet('${wallet}')">删除</button>
+                </div>
+            `).join('')}
+            ${wallets.length === 0 ? '<p>暂无监控的钱包</p>' : ''}
+        </div>
+        
+        <div class="form-group">
+            <h3>➕ 添加监控钱包</h3>
+            <input type="text" id="walletAddress" placeholder="输入BSC钱包地址 (0x...)" />
+            <button onclick="addWallet()">添加钱包</button>
+        </div>
+    </div>
+
+    <script>
+        async function addWallet() {
+            const address = document.getElementById('walletAddress').value.trim();
+            if (!address) {
+                alert('请输入钱包地址');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/wallets', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ walletAddress: address })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('钱包添加成功');
+                    location.reload();
+                } else {
+                    alert('添加失败: ' + result.message);
+                }
+            } catch (error) {
+                alert('网络错误: ' + error.message);
+            }
+        }
+        
+        async function removeWallet(address) {
+            if (!confirm('确定要移除这个监控钱包吗？')) return;
+            
+            try {
+                const response = await fetch('/api/wallets/' + encodeURIComponent(address), {
+                    method: 'DELETE'
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('钱包移除成功');
+                    location.reload();
+                } else {
+                    alert('移除失败: ' + result.message);
+                }
+            } catch (error) {
+                alert('网络错误: ' + error.message);
+            }
+        }
+        
+        // 自动刷新状态
+        setInterval(() => {
+            fetch('/status')
+                .then(response => response.json())
+                .then(status => {
+                    const indicator = document.querySelector('.speed-indicator');
+                    indicator.innerHTML = \`⚡ 目标: 5秒内通知 | 最后响应: \${status.performance.lastNotificationTime} | 极速率: \${status.performance.fastRate}\`;
+                    indicator.className = 'speed-indicator ' + 
+                        (parseInt(status.performance.lastNotificationTime) <= 3000 ? 'ultra-fast' : 
+                         parseInt(status.performance.lastNotificationTime) <= 5000 ? 'fast' : 'slow');
+                });
+        }, 3000);
+    </script>
+</body>
+</html>
+  `);
+});
+
 // 启动服务器
 app.listen(PORT, () => {
   console.log('='.repeat(70));
   console.log('🚀 BSC钱包终极监控系统 v8.0 启动成功!');
   console.log('🛡️ 终极完整版 - 集成所有优化');
   console.log(`📍 服务地址: http://localhost:${PORT}`);
+  console.log(`🔧 管理界面: http://localhost:${PORT}/admin`);
   console.log(`❤️ 健康检查: http://localhost:${PORT}/health`);
   console.log('🎯 核心特性:');
   console.log(`   - ⚡ 5秒内极速通知`);
