@@ -1,5 +1,5 @@
-// 🚀 BSC钱包监控系统 - 终极完整修复版
-// server.js - 修复所有问题并优化通知格式的完整版本
+// 🚀 BSC钱包监控系统 - 终极完整修复版 v8.1
+// server.js - 修复部署问题并优化所有功能的完整版本
 const Web3 = require('web3');
 const axios = require('axios');
 const express = require('express');
@@ -399,6 +399,7 @@ class BSCWalletMonitor {
         }
       } catch (error) {
         console.error('❌ 轮询错误:', error.message);
+        this.switchHttpNode(); // 轮询错误时切换节点
       }
     };
     
@@ -539,12 +540,17 @@ class BSCWalletMonitor {
     
     console.log(`🎯 发现 ${monitoredTxs.length} 笔监控交易`);
     
-    // 第二轮：并行发送通知
-    const notificationPromises = monitoredTxs.map(monitoredTx => 
-      this.sendUltraFastNotification(monitoredTx.tx, block, monitoredTx.fromMonitored, monitoredTx.toMonitored, startTime)
-    );
-    
-    await Promise.all(notificationPromises);
+    // 第二轮：并行发送通知（限制并发数避免过载）
+    const parallelLimit = CONFIG.SPEED_OPTIMIZATION.parallelTransactionLimit;
+    for (let i = 0; i < monitoredTxs.length; i += parallelLimit) {
+      const batch = monitoredTxs.slice(i, i + parallelLimit);
+      const notificationPromises = batch.map(monitoredTx => 
+        this.sendUltraFastNotification(monitoredTx.tx, block, monitoredTx.fromMonitored, monitoredTx.toMonitored, startTime)
+      );
+      
+      await Promise.all(notificationPromises);
+      await this.sleep(100); // 批次间轻微延迟
+    }
   }
 
   // ==================== 极速通知系统 ====================
@@ -562,7 +568,7 @@ class BSCWalletMonitor {
       const message = this.generateUltraFastMessage(tx, block, transactionAnalysis, detectionTime);
       
       // 立即发送通知
-      this.sendDingTalkImmediate(message);
+      await this.sendDingTalkImmediate(message);
       
       const notificationTime = Date.now() - notificationStart;
       const totalTime = detectionTime + notificationTime;
@@ -619,7 +625,7 @@ class BSCWalletMonitor {
       }
     }
     
-    // 风险评估
+    // 风险评估 - 使用BigInt彻底避免大整数错误
     let value = '0';
     try {
       if (tx.value) {
@@ -633,6 +639,7 @@ class BSCWalletMonitor {
         else if (valueNum > 1) riskLevel = 'MEDIUM';
       }
     } catch (error) {
+      console.log('❌ 金额转换错误，使用默认值0');
       value = '0';
     }
     
@@ -709,7 +716,7 @@ class BSCWalletMonitor {
       await this.sendDingTalkImmediate(message);
       console.log('🔍 详细通知已发送');
     } catch (error) {
-      console.log('详细通知发送失败');
+      console.log('详细通知发送失败:', error.message);
     }
   }
 
@@ -717,6 +724,7 @@ class BSCWalletMonitor {
   async getTokenInfo(tx) {
     if (!tx.to) return null;
     
+    // 检查缓存
     if (this.tokenCache.has(tx.to)) {
       return this.tokenCache.get(tx.to);
     }
@@ -741,6 +749,7 @@ class BSCWalletMonitor {
         address: tx.to
       };
       
+      // 缓存结果
       this.tokenCache.set(tx.to, tokenInfo);
       
       // 设置缓存过期
@@ -750,6 +759,7 @@ class BSCWalletMonitor {
       
       return tokenInfo;
     } catch (error) {
+      console.log('❌ 获取代币信息失败:', error.message);
       return null;
     }
   }
@@ -804,17 +814,19 @@ class BSCWalletMonitor {
 
   // 立即发送钉钉通知
   async sendDingTalkImmediate(message) {
-    axios.post(CONFIG.DINGTALK_WEBHOOK, message, {
-      timeout: 5000
-    }).then(response => {
+    try {
+      const response = await axios.post(CONFIG.DINGTALK_WEBHOOK, message, {
+        timeout: 5000
+      });
+      
       if (response.data.errcode === 0) {
         console.log('✅ 钉钉通知发送成功');
       } else {
         console.log('❌ 钉钉通知发送失败:', response.data);
       }
-    }).catch(error => {
+    } catch (error) {
       console.error('❌ 发送钉钉通知失败:', error.message);
-    });
+    }
   }
 
   // ==================== 辅助方法 ====================
@@ -896,7 +908,7 @@ class BSCWalletMonitor {
       markdown: {
         title: '🚀 BSC终极监控启动',
         text: `### 🛡️ BSC钱包终极监控系统已启动\n\n` +
-              `**版本**: 终极完整版\n` +
+              `**版本**: 终极完整版 v8.1\n` +
               `**启动时间**: ${new Date().toLocaleString('zh-CN')}\n` +
               `**监控钱包**: ${CONFIG.MONITORED_WALLETS.length}个\n` +
               `**目标响应**: ≤5秒\n` +
@@ -904,7 +916,9 @@ class BSCWalletMonitor {
               `- ⚡ WebSocket实时监听\n` +
               `- 🛡️ JSON-RPC零大整数错误\n` +
               `- 🔄 三重保险防漏块\n` +
-              `- 🎯 智能交易分析\n\n` +
+              `- 🎯 智能交易分析\n` +
+              `- 📋 地址一键复制\n` +
+              `- 🔍 交易信号不漏\n\n` +
               `💡 系统已开始极速监控，交易将在5秒内通知！`
       },
       at: {
@@ -912,7 +926,7 @@ class BSCWalletMonitor {
       }
     };
     
-    this.sendDingTalkImmediate(message);
+    await this.sendDingTalkImmediate(message);
   }
 
   // 管理钱包方法
@@ -1003,7 +1017,7 @@ app.get('/', (req, res) => {
   res.json({ 
     status: '运行中', 
     service: 'BSC钱包终极监控系统',
-    version: '终极完整版',
+    version: '终极完整版 v8.1',
     timestamp: new Date().toISOString()
   });
 });
@@ -1090,7 +1104,7 @@ app.get('/admin', (req, res) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BSC钱包终极监控系统</title>
+    <title>BSC钱包终极监控系统 v8.1</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
         .container { max-width: 1000px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
@@ -1122,7 +1136,7 @@ app.get('/admin', (req, res) => {
 </head>
 <body>
     <div class="container">
-        <h1>🛡️ BSC钱包终极监控系统 v8.0</h1>
+        <h1>🛡️ BSC钱包终极监控系统 v8.1</h1>
         
         <div class="speed-indicator ${status.performance.lastNotificationTime <= 3000 ? 'ultra-fast' : status.performance.lastNotificationTime <= 5000 ? 'fast' : 'slow'}">
             ⚡ 目标: 5秒内通知 | 最后响应: ${status.performance.lastNotificationTime}ms | 极速率: ${status.performance.fastRate}
@@ -1172,6 +1186,7 @@ app.get('/admin', (req, res) => {
                 <p>✅ 漏块自动补扫</p>
                 <p>✅ 零大整数错误</p>
                 <p>✅ 5秒内通知</p>
+                <p>✅ 地址一键复制</p>
             </div>
         </div>
         
@@ -1263,7 +1278,7 @@ app.get('/admin', (req, res) => {
 // ==================== 启动服务器和监控 ====================
 app.listen(PORT, () => {
   console.log('='.repeat(70));
-  console.log('🚀 BSC钱包终极监控系统 v8.0 启动成功!');
+  console.log('🚀 BSC钱包终极监控系统 v8.1 启动成功!');
   console.log('🛡️ 终极完整版 - 集成所有优化');
   console.log(`📍 服务地址: http://localhost:${PORT}`);
   console.log(`🔧 管理界面: http://localhost:${PORT}/admin`);
@@ -1276,6 +1291,7 @@ app.listen(PORT, () => {
   console.log(`   - 🎯 智能交易分析`);
   console.log(`   - 🔄 自动故障恢复`);
   console.log(`   - 📊 实时性能监控`);
+  console.log(`   - 📋 地址一键复制`);
   console.log('='.repeat(70));
   
   // 延迟启动监控
@@ -1295,4 +1311,13 @@ process.on('SIGINT', () => {
 process.on('SIGTERM', () => {
   console.log('\n👋 收到终止信号，正在优雅退出...');
   process.exit(0);
+});
+
+// 未捕获异常处理
+process.on('uncaughtException', (error) => {
+  console.error('❌ 未捕获的异常:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ 未处理的Promise拒绝:', reason);
 });
