@@ -1,10 +1,11 @@
 {
-  "name": "bsc-wallet-monitor",
-  "version": "1.0.0",
-  "description": "BSC钱包实时监控系统",
+  "name": "bsc-wallet-monitor-ultimate",
+  "version": "8.0.0",
+  "description": "BSC钱包终极监控系统 - 集成所有优化",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "nodemon server.js"
   },
   "dependencies": {
     "web3": "^1.8.0",
@@ -14,5 +15,12 @@
   },
   "engines": {
     "node": ">=16.0.0"
-  }
+  },
+  "keywords": [
+    "bsc",
+    "monitor",
+    "crypto",
+    "wallet",
+    "blockchain"
+  ]
 }
